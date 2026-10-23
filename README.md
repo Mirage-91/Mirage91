@@ -1,2 +1,2 @@
 # Mirage91
-test
+![Logo of Mirage91](images/mirage91.jpg)
