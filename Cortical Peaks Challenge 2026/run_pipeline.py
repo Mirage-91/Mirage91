@@ -21,11 +21,11 @@ from features import (
     FilterBankCSP,
     RiemannianFeatures,
 )
-from io_utils import EVENT_ID, find_xdf_runs, load_xdf_run
-from preprocessing import downsample_raw, preprocess_run, reject_artifact_epochs
+from utils import EVENT_ID, find_xdf_runs, load_xdf_run
+from preprocessing import preprocess_run, reject_artifact_epochs
 
 #-----------------------------------------------------------------------
-#here come a few default settings for the pipeline 
+# default settings for the pipeline 
 
 DEFAULT_BANDPOWER_CLASS_CONFIGS = {
     "left_hand": ("C3", 5, 10),
@@ -121,16 +121,18 @@ def load_and_preprocess_all(
 
 
 def build_feature_extractors(sfreq: float, ch_names: list[str], tmin: float) -> dict:
+    n_samples = int(round((DEFAULT_TMAX - tmin) * sfreq)) + 1
+    times = np.linspace(tmin, DEFAULT_TMAX, n_samples)
     extractors = {
-        "Bandpower": BandpowerFeatures(DEFAULT_BANDPOWER_CLASS_CONFIGS, ch_names, sfreq, tmin),
-        "CSP": CSPFeatures(n_components=6, sfreq=sfreq, tmin=tmin),
-        "FBCSP": FilterBankCSP(bands=DEFAULT_FREQUENCY_BANDS, sfreq=sfreq, tmin=tmin),
-        "Riemann": RiemannianFeatures(bands=DEFAULT_FREQUENCY_BANDS, sfreq=sfreq, tmin=tmin), 
+        "Bandpower": BandpowerFeatures(DEFAULT_BANDPOWER_CLASS_CONFIGS, ch_names, sfreq, times),
+        "CSP": CSPFeatures(n_components=6, sfreq=sfreq, times=times),
+        "FBCSP": FilterBankCSP(bands=DEFAULT_FREQUENCY_BANDS, sfreq=sfreq, times=times),
+        "Riemann": RiemannianFeatures(bands=DEFAULT_FREQUENCY_BANDS, sfreq=sfreq, times=times),
         "ERDS": ERDSFeatures(
             specs=DEFAULT_ERDS_SPECS,
             ch_names=ch_names,
             sfreq=sfreq,
-            tmin=tmin,
+            times=times,
             baseline_window=DEFAULT_BASELINE or (-2.0, 0.0),
         ),
     }
