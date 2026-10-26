@@ -9,4 +9,4 @@ The respective implementations for either MI or P300 can be found in the `ipynb`
 
 This is **just a blue print** so modify it to your hearts desire and needs. 
 
-![Cat Meme](images/cat_meme.jpg)
+![Cat Meme](cat_meme.jpg)
