@@ -63,11 +63,10 @@ minutes (ca. 10-15 min) while it loads, filters, and rejects EEG data.
 
 Configs you can tune is at the top of file `run_pipeline.py`:\
 `BANDPOWER_CLASS_CONFIGS`, `DEFAULT_PTP_THRESHOLD` / `DEFAULT_GRAD_THRESHOLD`
-/ `DEFAULT_MAX_BAD_CHANNEL_FRAC` (artifact rejection), `DEFAULT_EXCLUDE_CHANNELS`
-(channels dropped outright — Fp1/Fp2 by default, blink-prone), `DEFAULT_FREQUENCY_BANDS`
+/ `DEFAULT_MAX_BAD_CHANNEL_FRAC` (artifact rejection), `DEFAULT_EXCLUDE_CHANNELS`, `DEFAULT_FREQUENCY_BANDS`
 / `DEFAULT_ERDS_SPECS` (FBCSP/Riemann/ERDS band settings). 
 
-## Step 2 - Freeze the winning model
+### Step 2 - Freeze the winning model
 
 Once a combination is picked for each game/command-pair you need, 
 it needs to be trained on ALL data (remember before we held out data for folds) 
@@ -94,61 +93,99 @@ mapping (e.g. `--classes right_hand feet --model-name jump_and_duck`).
 Omit `--classes` entirely to train on all 4 for the full-game model
 (`--model-name full_game`); any subset works too (e.g. a 3-way).
 
-## Step 3 (Online): run it live
+### Step 3 (Online): connect the model to a game
 
-Run the online file from this project directory:
+The online setup uses three processes. Start them in order, each in its own
+terminal: the **game server**, the **prediction pipeline**, then the **game connector**.
+The server must be running before the connector can send commands, and the
+pipeline must be streaming before the connector can receive predictions.
+
+#### Terminal 1: start the game server
+
+For local testing, start the game's test server that you can find here in this repo:
+
 ```
-python online_pipeline.py --model models/jump_only.joblib
-```
-
-Test against a recorded file first — no hardware needed:
-```
-python online_pipeline.py --model models/jump_only.joblib \
-    --replay-file /path/to/session1_run1.xdf --speed 20
-```
-
-Pushes continuous class probabilities (not a single discrete decision) to
-an LSL stream named `ClassifierOutput`, type `ClassProb` — matches the old
-team's own `main_ML.py` convention. Startup prints the channel order (e.g.
-`['rest', 'right_hand']`) for a quick sanity check, and the same order is
-now embedded directly in the LSL stream's own metadata, so your teammate's
-code (see `game_connector.py` below) reads it straight from the stream
-instead of having to hardcode or eyeball the printed line. Get this
-backwards and every command inverts silently, so still worth double-checking.
-
-### Important for the online step
-
-The model was trained on 6-second **cue-aligned** epochs (2s quiet baseline + 4s post-cue movement imagery). Live, there's of course no cue. So we use a rolling 6-second buffer of "whatever just happened,". Sadly ,however, this won't give us any baseline as the pilot will always be "active" so to speak. 
-We need to expect lower live accuracy than the offline cross-validation numbers suggested. 
-`online_pipeline.py --smoothing-window N` averages the last N predictions'
-probabilities to reduce jitter/false triggers (default 5; set to 1 for raw,
-unsmoothed output) — helps some, but doesn't fix the underlying
-baseline/no-baseline mismatch. Retraining on shorter, baseline-free windows
-that better match what the online buffer can actually provide is the more
-fundamental fix, still TODO.
-
-## Game side: getting predictions into the game
-
-`game_connector.py` is the file your teammate actually needs — it
-wraps the LSL details into one function so they don't have to touch arrays,
-indices, or model internals:
-
-```python
-from game_connector import PredictionClient
-
-client = PredictionClient()   # connects once, at startup
-
-while game_running:
-    label, confidence = client.get_prediction()
-    if label == "right_hand" and confidence > 0.7:
-        trigger_jump()
+python fake_server.py
 ```
 
-`label` is always a real class name read live from the stream, so it stays
-correct even if you swap in a different `--model-name` `.joblib` later.
-Requires `pylsl` installed on whichever machine runs the game code too.
-`online_pipeline.py` must already be running (live or `--replay-file`) for
-this to have a stream to connect to.
+To use it in an actual competition, start the official game server as instructed by the official Github repo of [neuroTUM](https://github.com/neuroTUM/Cortical-Peaks-Challenge-2026). The server files are not included in this project, so the
+server command depends on that checkout.
+
+#### Terminal 2: start the prediction pipeline
+
+For a live EEG stream, run this from the project directory with the model
+trained for the game:
+
+```
+python online_pipeline.py --model models/<model-name>.joblib
+```
+
+For local testing without EEG hardware, replay an XDF recording instead:
+
+```
+python online_pipeline.py --model models/<model-name>.joblib \
+        --replay-file recordings/session1_run1.xdf --speed 20
+```
+
+The pipeline connects to an LSL stream of type `EEG` in live mode, or reads
+the recording in replay mode. It filters the incoming data, keeps a rolling
+window matching the model's training window, and emits class-probability
+vectors to an LSL stream named `ClassifierOutput` (type `ClassProb`). The
+class order is printed at startup and embedded in the stream metadata. Check
+that the model's classes make sense for the selected game before proceeding.
+
+#### Terminal 3: start the game connector
+
+Run this project's `game_connector.py` with the game server checkout root on
+`PYTHONPATH` (so its `shared` package can be imported). From the project
+directory, pass the same model file used by the pipeline and the game name:
+Use the folder that contains `shared/`, not the `shared/` folder itself. To
+find it, locate `shared/connection/protocol.py` in the game server repository;
+the `PYTHONPATH` value is the repository root above `shared/`. For example, if
+that file is `/path/to/game-server-repo/shared/connection/protocol.py`, use
+`/path/to/game-server-repo` as the path below.
+
+```
+PYTHONPATH=/path/to/game-server-repo:$PYTHONPATH python game_connector.py \
+        --model models/<model-name>.joblib --game <game>
+```
+
+The cheat-sheet game identifiers are `dino_jump` (BrainSki 1, jump only),
+`dino` (BrainSki 1, jump and duck), `ski` (BrainSki 2, static), `ski_dyn`
+(BrainSki 2, dynamic), `pong`, and `pong_ai`. For example, with the model
+available at `models/dino_jump.joblib`:
+
+```
+PYTHONPATH=/path/to/game-server-repo:$PYTHONPATH python game_connector.py \
+        --model models/dino_jump.joblib --game dino_jump
+```
+
+The connector reads the probability stream, selects the highest-probability
+class, and sends a game command only when confidence is at least `0.6`
+(configurable with `--confidence-threshold`). Rest and classes not mapped to
+an action for that game are ignored. The connector also needs `pylsl` and the
+game server's `shared.connection` package. It connects to the server at
+`127.0.0.1:5000` by default.
+
+| Game (`--game`) | Classes mapped to actions |
+| --- | --- |
+| `dino_jump` | `right_hand` → jump |
+| `dino` | `feet` → jump; `right_hand` → duck |
+| `ski`, `ski_dyn` | `left_hand` → rotate left; `right_hand` → rotate right; `feet` → forward |
+| `pong`, `pong_ai` | `right_hand` → up; `feet` → down |
+
+Before each new model/game pairing, compare the pipeline's startup `classes`
+and `Output ... channel order` with the mapping above. The model needs to
+contain the class labels required by that game; otherwise actions for missing
+classes cannot be produced. Model names in the cheat sheet (such as `dino`
+and `brainski`) are examples and must exist at the path you pass to both
+commands.
+
+Replay mode is for trying out the pipeline and connector locally; it does
+not replace the live EEG stream or the competition server during a real run.
+The model was trained on cue-aligned epochs, while the online pipeline uses
+a rolling window of recent EEG without cue timing. Expect live performance
+to differ from offline cross-validation. 
 
 
 ## If something breaks 
@@ -160,7 +197,7 @@ this to have a stream to connect to.
 - **`externally-managed-environment` pip error**: you're not actually
   inside the venv — `source .venv/bin/activate` first. Disregard if you 
   are doing it without a virtual environment. 
-- ** Sorry if anything else breaks. You are on your own then.
+-  Sorry if anything else breaks. It's ok to cry. 
 
 
 
