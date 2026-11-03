@@ -20,7 +20,7 @@ scaling_dict = {"eeg": 1e-6}
 
 def main():
     """Main function to process EEG data, extract features, and evaluate classification accuracy."""
-    fname= "exam_eeg.xdf"
+    fname= "OpenProjects/P300Speller/Micha1.xdf"
     temp_data = pyxdf.load_xdf(fname)
 
     #printing the markers 
